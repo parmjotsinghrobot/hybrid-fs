@@ -36,6 +36,9 @@ class HybridFS(LoggingMixIn, Operations):
         #     'st_mtime': st_mtime,
         #     'st_atime': st_atime,
         #     'st_nlink': st_nlink,
+        #     'st_size': st_size,
+        #     'st_uid': st_uid,
+        #     'st_gid': st_gid,
         # }
         self.source_map = {}
 
@@ -60,6 +63,10 @@ class HybridFS(LoggingMixIn, Operations):
             'st_mtime': now,
             'st_atime': now,
             'st_nlink': 2,
+            'st_size': 0,
+            # we need to get the user and group ids of the user who owns the mount point. using os.getuid() and os.getgid() get the currently running user, which isnt always the same. hence, we should get the user and group ids of the owner of the mount point by using os.stat() on the mount point and getting the st_uid and st_gid from the stat result
+            'st_uid': os.stat(argv[3]).st_uid,
+            'st_gid': os.stat(argv[3]).st_gid,
         }
 
         # we can populate the source map by walking through the two source directories and mapping each file to its root
@@ -75,6 +82,9 @@ class HybridFS(LoggingMixIn, Operations):
                         'st_atime': os.path.getatime(path),
                         # it might seem fair to assume that the number of links is 1 for all files, but we should actually check if the file is a hard link and set the number of links accordingly; however, for simplicity we can just set it to 1 for now and ignore hard links
                         'st_nlink': 1,
+                        'st_size': os.path.getsize(path),
+                        'st_uid': os.stat(path).st_uid,
+                        'st_gid': os.stat(path).st_gid,
                     }
                     # we should also increment the link count for the root
                     self.source_map['/']['st_nlink'] += 1
