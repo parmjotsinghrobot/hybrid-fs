@@ -117,6 +117,36 @@ class HybridFS(LoggingMixIn, Operations):
         logger.debug("files in directory: %s", files)
         return files
 
+    def open(self, path, flags):
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # memory file, fd is just a counter
+            self.fd += 1
+            return self.fd
+        else:
+            full_path = os.path.join(root, path[1:])  # strip leading /
+            return os.open(full_path, flags)
+
+    def read(self, path, size, offset, fh):
+        logger.debug("read called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # this is a file created in memory
+            return self.memory.read(path, size, offset, fh)
+        elif root == self.passthrough1.root:
+            return self.passthrough1.read(path, size, offset, fh)
+        elif root == self.passthrough2.root:
+            return self.passthrough2.read(path, size, offset, fh)
+        else:
+            raise FuseOSError(errno.EACCES)
+
+
 def main(root1, root2, mountpoint):
     FUSE(HybridFS(root1, root2), mountpoint, nothreads=True, foreground=True)
 
