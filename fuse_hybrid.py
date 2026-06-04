@@ -28,22 +28,9 @@ logger = logging.getLogger('hybridfs')
 class HybridFS(LoggingMixIn, Operations):
     def __init__(self, root1, root2):
         # we need to map a file path to what root it belongs to
-        # the source map will have the relative path as the key, and the following dictionary as the value:
-        # {
-        #     'root': root1 or root2,
-        #     'st_mode': st_mode (dir or file),
-        #     'st_ctime': st_ctime,
-        #     'st_mtime': st_mtime,
-        #     'st_atime': st_atime,
-        #     'st_nlink': st_nlink,
-        #     'st_size': st_size,
-        #     'st_uid': st_uid,
-        #     'st_gid': st_gid,
-        # }
         self.source_map = {}
 
-        # open file descriptor set, if the file is opened, it gets added to this set, and when it is closed, it gets removed from this set; size of th set is the number of open files
-        self.fd = {}
+        self.fd = 0
 
         # passthrough deals with all the file opersa
         self.passthrough1 = Passthrough(root1)
@@ -52,9 +39,6 @@ class HybridFS(LoggingMixIn, Operations):
         # memory fs for new files created in the mount point - these die when the fs is unmounted
         self.memory = Memory()
         
-        # lets add the fake root to the source map, this will be used to handle the root directory of the mount point
-
-        # something strange that is happening with '/' is that the key is actually being converted into a relative path to my home folder, which is really weird; for example, if my home folder is /home/parmjot, then the key in the source map is actually '../../../[...]/../' instead of just '/'. 
         now = time()
         self.source_map['/'] = {
             'root': None,
@@ -64,7 +48,7 @@ class HybridFS(LoggingMixIn, Operations):
             'st_atime': now,
             'st_nlink': 2,
             'st_size': 0,
-            # we need to get the user and group ids of the user who owns the mount point. using os.getuid() and os.getgid() get the currently running user, which isnt always the same. hence, we should get the user and group ids of the owner of the mount point by using os.stat() on the mount point and getting the st_uid and st_gid from the stat result
+            # we need to get the user and group ids of the user who owns the mount point.
             'st_uid': os.stat(argv[3]).st_uid,
             'st_gid': os.stat(argv[3]).st_gid,
         }
@@ -80,13 +64,11 @@ class HybridFS(LoggingMixIn, Operations):
                         'st_ctime': os.path.getctime(path),
                         'st_mtime': os.path.getmtime(path),
                         'st_atime': os.path.getatime(path),
-                        # it might seem fair to assume that the number of links is 1 for all files, but we should actually check if the file is a hard link and set the number of links accordingly; however, for simplicity we can just set it to 1 for now and ignore hard links
                         'st_nlink': 1,
                         'st_size': os.path.getsize(path),
                         'st_uid': os.stat(path).st_uid,
                         'st_gid': os.stat(path).st_gid,
                     }
-                    # we should also increment the link count for the root
                     self.source_map['/']['st_nlink'] += 1
         
         # lets list out all the files in the source directories and log them
@@ -94,9 +76,7 @@ class HybridFS(LoggingMixIn, Operations):
         for path in self.source_map:
             logger.info(path)
 
-        # note - these paths include the root directory, we should strip that out now to make it easier to work with later
-        # note 2 - this code breaks the '/' key, we should make sure to skip that key when we are doing this
-        # note 3 - we want to keep the / preceding the relative path to make it easier to work with later, for example, when we are doing the readdir operation, we can just check if the file path starts with the specified path and is not equal to the specified path (to avoid including the directory itself in the list of files returned)
+
         for path in list(self.source_map.keys()):
             if path == '/':
                 continue
@@ -113,7 +93,7 @@ class HybridFS(LoggingMixIn, Operations):
         # we should probably handle . and .. as well, since they are used in the readdir operation; however, .. is a bit odd since it will be reading the parent directory of the mount point, which is outside of our control; for now we can just ignore it and let it fail if it is accessed
         self.source_map['.'] = None
         self.source_map['..'] = None
-        
+
 
     def getattr(self, path, fh=None):
         logger.debug("getattr called with path: %s", path)
@@ -128,10 +108,8 @@ class HybridFS(LoggingMixIn, Operations):
         # we should return the list of files in the directory specified by path; we can do this by looking at the source map and finding all the files that have the specified path as a prefix; for example, if the path is /dir1, then we should return all the files that have /dir1 as a prefix in their relative path; we should also include . and .. in the list of files returned
         files = ['.', '..']
         for file_path in self.source_map:
-            # we do not have nested directories, so we can just check if the file path starts with the specified path and is not equal to the specified path (to avoid including the directory itself in the list of files returned)
-            # files have / in front of them
+            # no nested dirs
             if file_path.startswith(path) and file_path != path:
-                # we should also check if the file path is directly under the specified path, and not in a subdirectory; for example, if the specified path is /dir1, then we should include /dir1/file1 in the list of files returned, but not /dir1/subdir/file2; we can do this by checking if the relative path of the file (relative to the specified path) does not contain a / character
                 relative_path = os.path.relpath(file_path, path)
                 if '/' not in relative_path:
                     files.append(relative_path)
