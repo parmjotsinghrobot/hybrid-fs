@@ -94,6 +94,7 @@ class HybridFS(LoggingMixIn, Operations):
         self.source_map['.'] = None
         self.source_map['..'] = None
 
+    ## fs stuff
 
     def getattr(self, path, fh=None):
         logger.debug("getattr called with path: %s", path)
@@ -116,6 +117,8 @@ class HybridFS(LoggingMixIn, Operations):
 
         logger.debug("files in directory: %s", files)
         return files
+
+    ## file stuff
 
     def open(self, path, flags):
         if path not in self.source_map:
@@ -143,6 +146,113 @@ class HybridFS(LoggingMixIn, Operations):
             return self.passthrough1.read(path, size, offset, fh)
         elif root == self.passthrough2.root:
             return self.passthrough2.read(path, size, offset, fh)
+        else:
+            raise FuseOSError(errno.EACCES)
+    
+    def create(self, path, mode):
+        logger.debug("create called with path: %s", path)
+        if path in self.source_map:
+            raise FuseOSError(errno.EEXIST)
+
+        # create a new file in memory
+        self.memory.create(path, mode)
+
+        # add it to the source map
+        now = time()
+        self.source_map[path] = {
+            'root': None,
+            'st_mode': S_IFREG | mode,
+            'st_ctime': now,
+            'st_mtime': now,
+            'st_atime': now,
+            'st_nlink': 1,
+            'st_size': 0,
+            'st_uid': os.getuid(),
+            'st_gid': os.getgid()
+        }
+        self.fd += 1
+        return self.fd
+
+    def write(self, path, data, offset, fh):
+        logger.debug("write called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # ensure data is bytes, ensure existing data is bytes
+            existing = self.memory.data[path]
+            if isinstance(existing, str):
+                existing = existing.encode()
+            if isinstance(data, str):
+                data = data.encode()
+            self.memory.data[path] = existing[:offset] + data
+            self.memory.files[path]['st_size'] = len(self.memory.data[path])
+            self.source_map[path]['st_size'] = self.memory.files[path]['st_size']
+            return len(data)
+        else:
+            self.source_map[path]['st_mtime'] = time()
+            self.source_map[path]['st_atime'] = time()
+            self.source_map[path]['st_size'] = max(self.source_map[path]['st_size'], offset + len(data))
+            # file in source, passthrough write
+            if root == self.passthrough1.root:
+                return self.passthrough1.write(path, data, offset, fh)
+            elif root == self.passthrough2.root:
+                return self.passthrough2.write(path, data, offset, fh)
+            else:
+                raise FuseOSError(errno.EACCES)
+
+    def truncate(self, path, length, fh=None):
+        logger.debug("truncate called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # memory file, just update the data and size
+            existing = self.memory.data[path]
+            if isinstance(existing, str):
+                existing = existing.encode()
+            self.memory.data[path] = existing[:length]
+            self.memory.files[path]['st_size'] = len(self.memory.data[path])
+            self.source_map[path]['st_size'] = self.memory.files[path]['st_size']
+            return 0
+        elif root == self.passthrough1.root:
+            return self.passthrough1.truncate(path, length, fh)
+        elif root == self.passthrough2.root:
+            return self.passthrough2.truncate(path, length, fh)
+        else:
+            raise FuseOSError(errno.EACCES)
+    
+    def flush(self, path, fh):
+        logger.debug("flush called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # memory file, nothing to flush
+            return 0
+        elif root == self.passthrough1.root:
+            return self.passthrough1.flush(path, fh)
+        elif root == self.passthrough2.root:
+            return self.passthrough2.flush(path, fh)
+        else:
+            raise FuseOSError(errno.EACCES)
+    
+    def release(self, path, fh):
+        logger.debug("release called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # memory file, nothing to release
+            return 0
+        elif root == self.passthrough1.root:
+            return self.passthrough1.release(path, fh)
+        elif root == self.passthrough2.root:
+            return self.passthrough2.release(path, fh)
         else:
             raise FuseOSError(errno.EACCES)
 
