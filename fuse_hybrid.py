@@ -255,6 +255,27 @@ class HybridFS(LoggingMixIn, Operations):
             return self.passthrough2.release(path, fh)
         else:
             raise FuseOSError(errno.EACCES)
+    
+    def unlink(self, path):
+        logger.debug("unlink called with path: %s", path)
+        if path not in self.source_map:
+            raise FuseOSError(errno.ENOENT)
+
+        root = self.source_map[path]['root']
+        if root is None:
+            # memory file, just remove it from the source map and memory
+            del self.source_map[path]
+            self.memory.unlink(path)
+            return 0
+        else:
+            # delete the file from the source map and passthrough
+            if root == self.passthrough1.root:
+                self.passthrough1.unlink(path)
+            elif root == self.passthrough2.root:
+                self.passthrough2.unlink(path)
+            else:
+                raise FuseOSError(errno.EACCES)
+            del self.source_map[path]
 
 
 def main(root1, root2, mountpoint):
